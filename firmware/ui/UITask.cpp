@@ -1363,11 +1363,76 @@ bool OnboardScreen::touch(const TouchEvent& e) {
 
 // ---------------------------------------------------------------- Radio diagnostics screen
 
+void DiagScreen::enter() { _page = 0; }
+
+void DiagScreen::refreshStorage() {
+  _flash_tot_kb  = SPIFFS.totalBytes() / 1024;
+  _flash_used_kb = SPIFFS.usedBytes()  / 1024;
+  _sd_present = false;
+  if (ui.hw.sdBegin()) {                       // grabs the shared SPI bus briefly
+    uint64_t tot = SD.totalBytes(), used = SD.usedBytes();
+    if (tot > 0) { _sd_present = true; _sd_tot_mb = tot / (1024*1024); _sd_free_mb = (tot - used) / (1024*1024); }
+    ui.hw.sdEnd();
+  }
+}
+
 void DiagScreen::draw() {
   GFXcanvas16& c = ui.cv();
   c.fillScreen(C_BG);
-  ui.drawStatusBar("Radio Diagnostics");
   c.setTextSize(1);
+
+  // rolling free-RAM history, sampled once per redraw (~1/s on this screen) (#3)
+  static const int RAMN = 116;
+  static uint16_t ramHist[RAMN];
+  ramHist[_ram_head] = (uint16_t)(ESP.getFreeHeap() / 1024);
+  _ram_head = (_ram_head + 1) % RAMN;
+
+  if (_page == 1) {                              // ---- page 2: storage + graph (#3)
+    ui.drawStatusBar("Storage & Performance");
+    int y2 = STATUS_H + 10; char sv[48];
+    c.setTextColor(C_ACCENT); c.setCursor(8, y2); c.print("Storage"); y2 += 15;
+
+    c.setTextColor(C_FG_DIM); c.setCursor(12, y2); c.print("Flash (SPIFFS)");
+    snprintf(sv, sizeof(sv), "%u / %u KB", (unsigned)_flash_used_kb, (unsigned)_flash_tot_kb);
+    c.setTextColor(C_FG); c.setCursor(170, y2); c.print(sv); y2 += 14;
+
+    c.setTextColor(C_FG_DIM); c.setCursor(12, y2); c.print("SD card");
+    if (_sd_present) { snprintf(sv, sizeof(sv), "%u free / %u MB", (unsigned)_sd_free_mb, (unsigned)_sd_tot_mb); c.setTextColor(C_GREEN); }
+    else             { snprintf(sv, sizeof(sv), "no card"); c.setTextColor(C_FG_FAINT); }
+    c.setCursor(170, y2); c.print(sv); y2 += 14;
+
+    c.setTextColor(C_FG_DIM); c.setCursor(12, y2); c.print("CPU clock");
+    snprintf(sv, sizeof(sv), "%u MHz", (unsigned)getCpuFrequencyMhz());
+    c.setTextColor(C_FG); c.setCursor(170, y2); c.print(sv); y2 += 18;
+
+    c.setTextColor(C_ACCENT); c.setCursor(8, y2); c.print("Free RAM (KB)"); y2 += 14;
+    const int GX = 34, GY = y2, GW = SCREEN_W - GX - 8, GH = SCREEN_H - GY - 22;
+    c.drawRect(GX, GY, GW, GH, C_FG_FAINT);
+    uint16_t mn = 0xFFFF, mx = 0;
+    for (int i = 0; i < RAMN; i++) { uint16_t vv = ramHist[i]; if (!vv) continue; if (vv < mn) mn = vv; if (vv > mx) mx = vv; }
+    if (!mx) { c.setTextColor(C_FG_FAINT); c.setCursor(GX + 6, GY + GH / 2); c.print("sampling..."); }
+    else {
+      if (mx == mn) mx = mn + 1;
+      int px = -1, py = -1;
+      for (int i = 0; i < RAMN; i++) {
+        uint16_t val = ramHist[(_ram_head + i) % RAMN];
+        if (!val) continue;
+        int x = GX + i * GW / RAMN;
+        int yy = GY + GH - (int)((long)(val - mn) * GH / (mx - mn));
+        if (yy < GY) yy = GY; if (yy > GY + GH) yy = GY + GH;
+        if (px >= 0) c.drawLine(px, py, x, yy, C_ACCENT);
+        px = x; py = yy;
+      }
+      char lbl[8];
+      c.setTextColor(C_FG_FAINT);
+      snprintf(lbl, sizeof(lbl), "%u", (unsigned)mx); c.setCursor(4, GY - 3);        c.print(lbl);
+      snprintf(lbl, sizeof(lbl), "%u", (unsigned)mn); c.setCursor(4, GY + GH - 6);    c.print(lbl);
+    }
+    c.setTextColor(C_FG_FAINT); c.setCursor(6, SCREEN_H - 10); c.print("roll left = back to radio");
+    return;
+  }
+
+  ui.drawStatusBar("Radio Diagnostics");
   NodePrefs* p = ui.prefs;
   int y = STATUS_H + 10;
   char v[40];
@@ -1428,16 +1493,22 @@ void DiagScreen::draw() {
   c.setTextColor(C_FG); c.setCursor(150, y); c.print(v);
 
   c.setTextColor(C_FG_FAINT); c.setCursor(6, SCREEN_H - 10);
-  c.print("press A to send a flood advert");
+  c.print("A=advert     roll right = storage & graph");
 }
 
 bool DiagScreen::key(uint8_t k) {
-  if (k == 'a' || k == 'A') {
+  if (_page == 0 && (k == 'a' || k == 'A')) {
     if (ui.mesh) ui.mesh->advertFlood();
     ui.toast("Advert sent", C_CYAN);
     return true;
   }
   return false;
+}
+
+bool DiagScreen::nav(NavEvent e) {
+  if (e == NAV_RIGHT && _page == 0) { _page = 1; refreshStorage(); return true; }
+  if (e == NAV_LEFT  && _page == 1) { _page = 0; return true; }
+  return false;   // BACK (hold) still propagates to leave the screen
 }
 
 // ---------------------------------------------------------------- SOS beacon screen
