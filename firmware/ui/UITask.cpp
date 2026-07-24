@@ -16,6 +16,7 @@
 #include <SD.h>
 
 #define SETTINGS_FILE "/meshdeck_set.bin"
+#define SD_SETTINGS_FILE "/meshdeck/config.bin"   // SD backup, survives a flash wipe (#12)
 
 // ---------------------------------------------------------------- text utils
 
@@ -219,11 +220,28 @@ void UITask::begin(MyMesh* m, SensorManager* s, NodePrefs* p) {
   prefs = p;
 
   // load persisted settings now that SPIFFS is mounted
+  bool loaded = false;
   File f = SPIFFS.open(SETTINGS_FILE, "r");
   if (f) {
     DeckSettings tmp;
-    if (f.read((uint8_t*)&tmp, sizeof(tmp)) == sizeof(tmp) && tmp.magic == DECKSET_MAGIC) set = tmp;
+    if (f.read((uint8_t*)&tmp, sizeof(tmp)) == sizeof(tmp) && tmp.magic == DECKSET_MAGIC) { set = tmp; loaded = true; }
     f.close();
+  }
+  // If SPIFFS held no valid config (fresh flash, or wiped by a Launcher reflash)
+  // restore from the SD backup and re-seed SPIFFS, so the first-boot wizard is
+  // skipped and the node comes back exactly as it was. (#12)
+  if (!loaded && hw.sdBegin()) {
+    File s = SD.open(SD_SETTINGS_FILE, "r");
+    if (s) {
+      DeckSettings tmp;
+      if (s.read((uint8_t*)&tmp, sizeof(tmp)) == sizeof(tmp) && tmp.magic == DECKSET_MAGIC) { set = tmp; loaded = true; }
+      s.close();
+    }
+    hw.sdEnd();
+    if (loaded) {
+      File w = SPIFFS.open(SETTINGS_FILE, "w");
+      if (w) { w.write((uint8_t*)&set, sizeof(set)); w.close(); }
+    }
   }
   // Migrate old saves off the wrong touch mapping: map 0 (landscape-direct) is
   // never correct on the T-Deck GT911, so treat a stored 0 as "use the default".
@@ -307,6 +325,14 @@ void UITask::saveSettings() {
   if (f) {
     f.write((uint8_t*)&set, sizeof(set));
     f.close();
+  }
+  // Also mirror to SD so the config survives a flash wipe - e.g. reflashing via
+  // bmorcelli's Launcher, which erases SPIFFS. Auto-restored on next boot. (#12)
+  if (hw.sdBegin()) {
+    SD.mkdir("/meshdeck");
+    File s = SD.open(SD_SETTINGS_FILE, FILE_WRITE);
+    if (s) { s.write((uint8_t*)&set, sizeof(set)); s.close(); }
+    hw.sdEnd();
   }
 }
 
@@ -879,11 +905,23 @@ void UITask::loop() {
 }
 
 void UITask::checkDim() {
-  if (set.timeout_s == 0 || set.always_on) return;
+  if (set.timeout_s == 0) return;
   uint32_t idle = millis() - hw.lastActivityMillis();
-  if (hw.isDisplayOn() && idle > (uint32_t)set.timeout_s * 1000) {
-    hw.displayOff();
+  bool expired = idle > (uint32_t)set.timeout_s * 1000;
+
+  if (set.always_on) {
+    // Always-On Clock: don't power the panel off (the clock must stay visible),
+    // but after the timeout drop to a low backlight to save battery instead of
+    // sitting at full brightness. Restore the user's brightness on activity. (#1)
+    const uint8_t DIM = 30;               // matches the min brightness (30..255)
+    if (hw.isDisplayOn()) {
+      uint8_t target = expired ? DIM : set.brightness;
+      if (target != _dim_level) { hw.setBacklight(target); _dim_level = target; }
+    }
+    return;
   }
+
+  if (hw.isDisplayOn() && expired) hw.displayOff();
 }
 
 // Remap a letter key to the number/symbol printed on it (T-Deck legend), used
