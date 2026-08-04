@@ -26,9 +26,9 @@ jobs:
       matrix:
         include:
           - env: tdeck_plus
-            prefix: mclite          # → mclite-v{version}.bin   (must match merge_firmware.py)
+            prefix: meshdeck          # → meshdeck-v{version}.bin   (must match merge_firmware.py)
           - env: twatch_ultra
-            prefix: mclite-watch    # → mclite-watch-v{version}.bin
+            prefix: meshdeck-watch    # → meshdeck-watch-v{version}.bin
     steps:
       - uses: actions/checkout@v7
 
@@ -102,7 +102,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "${{ github.event.release.tag_name }}" \
-            tools/config-tool/mclite_config_tool.html \
+            tools/config-tool/meshdeck_config_tool.html \
             --clobber
 
       - name: Keep only last 5 firmware versions per board
@@ -111,8 +111,8 @@ jobs:
           # Each board has its own filename pattern; prune independently so
           # one board's release cadence can't evict the other board's history.
           # Patterns must match merge_firmware.py ENV_TO_BIN_PREFIX.
-          ls -t mclite-v*.bin       2>/dev/null | tail -n +6 | xargs -r rm
-          ls -t mclite-watch-v*.bin 2>/dev/null | tail -n +6 | xargs -r rm
+          ls -t meshdeck-v*.bin       2>/dev/null | tail -n +6 | xargs -r rm
+          ls -t meshdeck-watch-v*.bin 2>/dev/null | tail -n +6 | xargs -r rm
 
       # Point the Mesh America Device Configurator catalog (served from raw.github)
       # at this release's assets (#42). Regenerated here so it never goes stale.
