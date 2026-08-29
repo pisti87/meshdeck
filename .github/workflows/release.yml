@@ -43,11 +43,6 @@ jobs:
           TAG="${{ github.event.inputs.tag }}"
           [ -z "$TAG" ] && TAG="${GITHUB_REF_NAME}"
 
-          if [[ ! "$TAG" =~ ^beta_[0-9]+$ ]]; then
-            echo "Invalid tag: $TAG"
-            exit 1
-          fi
-
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Building release: $TAG"
 
@@ -71,21 +66,20 @@ jobs:
           cp ".pio/build/heltec_v4_tft_companion_radio_usb_tcp_touch/firmware-merged.bin" \
              "dist/meshdeck-heltec-v4-tft-merged.bin"
 
-
           cp ".pio/build/LilyGo_TDeck_companion_radio_touch/firmware.bin" \
-             "dist/wadamesh-tdeck.bin"
+             "dist/meshdeck-tdeck.bin"
 
           cp ".pio/build/LilyGo_TDeck_companion_radio_touch/firmware-merged.bin" \
-             "dist/wadamesh-tdeck-merged.bin"
+             "dist/meshdeck-tdeck-merged.bin"
 
           ls -lh dist
 
       - name: Generate web flasher files
         run: |
           python3 scripts/build/gen-flasher-meta.py \
-          "${{ steps.version.outputs.tag }}" \
-          dist \
-          "release-notes/${{ steps.version.outputs.tag }}.txt"
+            "${{ steps.version.outputs.tag }}" \
+            dist \
+            "release-notes/${{ steps.version.outputs.tag }}.txt"
 
       - name: Create GitHub Release
         env:
