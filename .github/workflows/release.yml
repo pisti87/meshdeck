@@ -1,0 +1,102 @@
+name: release
+
+on:
+  push:
+    tags: ['beta_*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build (e.g. beta_13)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    env:
+      ENVS: "heltec_v4_tft_companion_radio_usb_tcp_touch LilyGo_TDeck_companion_radio_touch"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            .pio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'src/**', 'lib/**') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Resolve tag
+        id: version
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          [ -z "$TAG" ] && TAG="${GITHUB_REF_NAME}"
+
+          if [[ ! "$TAG" =~ ^beta_[0-9]+$ ]]; then
+            echo "Invalid tag: $TAG"
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Building release: $TAG"
+
+      - name: Build firmware
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          export PLATFORMIO_BUILD_FLAGS="-DFIRMWARE_RELEASE_TAG=\"${TAG}\" -DFIRMWARE_VERSION=\"meshdeck ${TAG}\""
+
+          for e in $ENVS; do
+            pio run -t mergebin -e "$e"
+          done
+
+      - name: Collect firmware
+        run: |
+          mkdir -p dist
+
+          cp ".pio/build/heltec_v4_tft_companion_radio_usb_tcp_touch/firmware.bin" \
+             "dist/meshdeck-heltec-v4-tft.bin"
+
+          cp ".pio/build/heltec_v4_tft_companion_radio_usb_tcp_touch/firmware-merged.bin" \
+             "dist/meshdeck-heltec-v4-tft-merged.bin"
+
+
+          cp ".pio/build/LilyGo_TDeck_companion_radio_touch/firmware.bin" \
+             "dist/wadamesh-tdeck.bin"
+
+          cp ".pio/build/LilyGo_TDeck_companion_radio_touch/firmware-merged.bin" \
+             "dist/wadamesh-tdeck-merged.bin"
+
+          ls -lh dist
+
+      - name: Generate web flasher files
+        run: |
+          python3 scripts/build/gen-flasher-meta.py \
+          "${{ steps.version.outputs.tag }}" \
+          dist \
+          "release-notes/${{ steps.version.outputs.tag }}.txt"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --title "meshdeck $TAG" \
+              --notes "Touch firmware $TAG for LilyGo T-Deck and Heltec V4."
+          fi
